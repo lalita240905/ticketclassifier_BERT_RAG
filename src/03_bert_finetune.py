@@ -191,7 +191,7 @@ def finetune():
         learning_rate=LR,
         warmup_ratio=0.1,              # linear warmup for first 10% of steps
         weight_decay=0.01,             # L2 regularization
-        evaluation_strategy="epoch",   # evaluate at end of each epoch
+        eval_strategy="epoch",   # evaluate at end of each epoch
         save_strategy="epoch",
         load_best_model_at_end=True,   # restore best checkpoint after training
         metric_for_best_model="macro_f1",
