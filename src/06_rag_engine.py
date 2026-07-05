@@ -39,6 +39,12 @@ except ImportError:
     _HAS_TRANSFORMERS = False
 
 try:
+    from google import genai as google_genai
+    _HAS_GEMINI = True
+except ImportError:
+    _HAS_GEMINI = False
+
+try:
     import anthropic
     _HAS_ANTHROPIC = True
 except ImportError:
@@ -52,6 +58,7 @@ CLASSIFIER_DIR = "outputs/bert_model"
 LABEL_MAP_PATH = "data/label_map.csv"
 MAX_LENGTH     = 128
 CLAUDE_MODEL   = "claude-sonnet-4-6"
+GEMINI_MODEL   = "gemini-2.5-flash"
 
 
 # ── Data structures ───────────────────────────────────────────────────────────
@@ -74,7 +81,7 @@ class NextBestAction:
     predicted_confidence: float | None
     retrieved: list[RetrievedTicket]
     draft_response: str
-    generation_mode: str  # "llm_grounded" | "extractive_fallback"
+    generation_mode: str  # "gemini_grounded" | "claude_grounded" | "extractive_fallback"
 
 
 # ── Engine ────────────────────────────────────────────────────────────────────
@@ -91,6 +98,7 @@ class TicketRAGEngine:
         classifier_dir: str = CLASSIFIER_DIR,
         label_map_path: str = LABEL_MAP_PATH,
         use_classifier: bool = True,
+        gemini_api_key: str | None = None,
         anthropic_api_key: str | None = None,
     ):
         self.index_dir = index_dir
@@ -123,13 +131,24 @@ class TicketRAGEngine:
                 print(f"Could not load classifier ({e}); continuing retrieval-only.")
 
         # -- LLM generation client (optional) --
-        api_key = anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY")
+        # Gemini is tried first (free-tier friendly), then Anthropic, then
+        # we fall back to the no-LLM extractive draft.
         self.llm_client = None
-        if api_key and _HAS_ANTHROPIC:
-            self.llm_client = anthropic.Anthropic(api_key=api_key)
-            print("Anthropic API key found — using LLM-grounded draft generation.")
+        self.llm_provider = None  # "gemini" | "claude" | None
+
+        gemini_key = gemini_api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        claude_key = anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY")
+
+        if gemini_key and _HAS_GEMINI:
+            self.llm_client = google_genai.Client(api_key=gemini_key)
+            self.llm_provider = "gemini"
+            print("Gemini API key found — using Gemini-grounded draft generation.")
+        elif claude_key and _HAS_ANTHROPIC:
+            self.llm_client = anthropic.Anthropic(api_key=claude_key)
+            self.llm_provider = "claude"
+            print("Anthropic API key found — using Claude-grounded draft generation.")
         else:
-            print("No Anthropic API key found — using extractive fallback draft generation.")
+            print("No LLM API key found — using extractive fallback draft generation.")
 
     # ── Intent prediction ─────────────────────────────────────────────────
 
@@ -204,8 +223,9 @@ class TicketRAGEngine:
 
     # ── Draft generation ──────────────────────────────────────────────────
 
-    def _generate_llm_grounded(self, text: str, retrieved: list[RetrievedTicket]) -> str:
-        """Ask Claude to draft a reply, grounded strictly in retrieved resolutions."""
+    @staticmethod
+    def _build_grounding_prompt(text: str, retrieved: list[RetrievedTicket]) -> tuple[str, str]:
+        """Shared system/user prompt construction for any LLM provider."""
         context_blocks = "\n\n".join(
             f"[Past ticket {r.ticket_id} | intent: {r.intent} | similarity: {r.similarity:.2f}]\n"
             f"Customer said: {r.instruction}\n"
@@ -228,6 +248,11 @@ class TicketRAGEngine:
             f"Retrieved past tickets and their resolutions:\n\n{context_blocks}\n\n"
             "Draft the agent's reply to the new ticket."
         )
+        return system_prompt, user_prompt
+
+    def _generate_claude_grounded(self, text: str, retrieved: list[RetrievedTicket]) -> str:
+        """Ask Claude to draft a reply, grounded strictly in retrieved resolutions."""
+        system_prompt, user_prompt = self._build_grounding_prompt(text, retrieved)
 
         response = self.llm_client.messages.create(
             model=CLAUDE_MODEL,
@@ -236,6 +261,20 @@ class TicketRAGEngine:
             messages=[{"role": "user", "content": user_prompt}],
         )
         return "".join(block.text for block in response.content if block.type == "text").strip()
+
+    def _generate_gemini_grounded(self, text: str, retrieved: list[RetrievedTicket]) -> str:
+        """Ask Gemini to draft a reply, grounded strictly in retrieved resolutions."""
+        system_prompt, user_prompt = self._build_grounding_prompt(text, retrieved)
+
+        response = self.llm_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=user_prompt,
+            config=google_genai.types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=500,
+            ),
+        )
+        return response.text.strip()
 
     def _generate_extractive_fallback(self, text: str, retrieved: list[RetrievedTicket]) -> str:
         """
@@ -280,11 +319,16 @@ class TicketRAGEngine:
 
     def generate_draft(self, text: str, retrieved: list[RetrievedTicket]) -> tuple[str, str]:
         """Returns (draft_response, generation_mode)."""
-        if self.llm_client is not None:
+        if self.llm_provider == "gemini":
             try:
-                return self._generate_llm_grounded(text, retrieved), "llm_grounded"
+                return self._generate_gemini_grounded(text, retrieved), "gemini_grounded"
             except Exception as e:
-                print(f"LLM generation failed ({e}); falling back to extractive draft.")
+                print(f"Gemini generation failed ({e}); falling back to extractive draft.")
+        elif self.llm_provider == "claude":
+            try:
+                return self._generate_claude_grounded(text, retrieved), "claude_grounded"
+            except Exception as e:
+                print(f"Claude generation failed ({e}); falling back to extractive draft.")
         return self._generate_extractive_fallback(text, retrieved), "extractive_fallback"
 
     # ── Full pipeline ─────────────────────────────────────────────────────

@@ -45,10 +45,12 @@ with st.sidebar:
     st.subheader("Settings")
     top_k = st.slider("Similar tickets to retrieve", min_value=1, max_value=10, value=5)
     st.markdown("---")
-    if engine.llm_client is not None:
+    if engine.llm_provider == "gemini":
+        st.success("LLM-grounded generation active (Gemini)")
+    elif engine.llm_provider == "claude":
         st.success("LLM-grounded generation active (Claude)")
     else:
-        st.warning("No ANTHROPIC_API_KEY set — using extractive fallback drafts")
+        st.warning("No GEMINI_API_KEY / ANTHROPIC_API_KEY set — using extractive fallback drafts")
     if engine.classifier is not None:
         st.success("BERT intent classifier loaded")
     else:
@@ -80,7 +82,12 @@ if st.button("Get recommendation", type="primary") and ticket_text.strip():
 
     with col2:
         st.subheader("Draft response")
-        mode_label = "LLM-grounded" if result.generation_mode == "llm_grounded" else "Extractive fallback"
+        mode_labels = {
+            "gemini_grounded": "LLM-grounded (Gemini)",
+            "claude_grounded": "LLM-grounded (Claude)",
+            "extractive_fallback": "Extractive fallback",
+        }
+        mode_label = mode_labels.get(result.generation_mode, result.generation_mode)
         st.caption(f"Generation mode: {mode_label}")
         st.text_area("Editable draft", value=result.draft_response, height=350, key="draft_output")
         st.caption("Review before sending — always verify against current policy.")

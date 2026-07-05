@@ -1,0 +1,10 @@
+{
+  "model": "BERT fine-tuned (bert-base-uncased)",
+  "accuracy": 0.9974,
+  "macro_f1": 0.9974,
+  "weighted_f1": 0.9974,
+  "epochs": 4,
+  "max_length": 128,
+  "batch_size": 32,
+  "learning_rate": 2e-05
+}
