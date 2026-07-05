@@ -1,0 +1,6 @@
+{
+  "embed_model_name": "sentence-transformers/all-MiniLM-L6-v2",
+  "embedding_dim": 384,
+  "n_tickets": 26872,
+  "metric": "cosine (via normalized inner product)"
+}

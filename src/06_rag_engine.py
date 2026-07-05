@@ -240,7 +240,10 @@ class TicketRAGEngine:
             "them. If the retrieved tickets conflict or don't clearly cover the new ticket, say "
             "so plainly and draft a best-effort reply flagged for agent review. Keep the tone "
             "professional and concise. Do not include a greeting/sign-off placeholder like "
-            "'[Agent Name]' — just write the body."
+            "'[Agent Name]' — just write the body. The retrieved resolutions may contain "
+            "template placeholders like {{Online Order Interaction}} or {{Company Portal Info}} "
+            "— rewrite these into natural, generic phrasing (e.g. 'your account portal') rather "
+            "than copying the bracketed placeholder text verbatim."
         )
 
         user_prompt = (
@@ -271,7 +274,7 @@ class TicketRAGEngine:
             contents=user_prompt,
             config=google_genai.types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                max_output_tokens=500,
+                max_output_tokens=1024,
             ),
         )
         return response.text.strip()
